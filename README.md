@@ -153,21 +153,6 @@ This methodology follows established practices in optimization research (see SIA
 
 ---
 
-## Citation
-
-If you use this codebase or methodology, please cite:
-
-```bibtex
-@inproceedings{adanysprox2026,
-  title={AdaNys-Prox: Scalable Composite Optimization via Quantized Lazy Nyström Preconditioning},
-  author={[Authors]},
-  booktitle={Proceedings of the 43rd International Conference on Machine Learning (ICML)},
-  year={2026}
-}
-```
-
----
-
 ## License
 
 This code is released under the MIT License. See [LICENSE](LICENSE) for details.

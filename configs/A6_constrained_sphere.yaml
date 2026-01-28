@@ -1,0 +1,129 @@
+# ==============================================================================
+# Experiment Configuration: A6_Constrained_Sphere
+# Purpose: Validate ANP-Newton performance on constrained optimization problems
+#         (Contribution 1: Variable-Metric Framework).
+# 
+# Problem: Minimize f(x) = 0.5 * x^T H x - b^T x
+#          subject to: ‖x‖_2 ≤ 1 (unit ball constraint)
+#
+# This validates the "projected quasi-Newton" capability of ANP-Newton.
+# ==============================================================================
+
+experiment:
+  id: "A6_Constrained_Sphere_Nyström"
+  description: "ANP-Newton on constrained quadratic with sphere constraint"
+  seed: 42
+  output_dir: "results/metrics/A6_constrained_sphere"
+
+# ===============================================================================
+# System Emulation Settings
+# ===============================================================================
+system:
+  device: "cpu"
+  dtype: "float32"
+  
+  virtual_cluster:
+    num_shards: 32
+    bandwidth_gbps: 400.0
+    latency_us: 50.0
+
+# ===============================================================================
+# Task Specification
+# ===============================================================================
+task:
+  name: "dense_quadratic_constrained"
+  dim: 2000
+  condition_number: 1.0e6
+  spectrum_type: "spiked"
+  data_path: "data/dense_d2000_cond1e6.pt"
+  constraint:
+    type: "sphere"          # Unit ball: ‖x‖ ≤ 1
+    radius: 1.0
+    project: true          # Use projection for constraint satisfaction
+
+# ===============================================================================
+# Optimizer Configuration (AdaNys-Prox with Constraints)
+# ===============================================================================
+optimizer:
+  name: "adanys_prox"
+  
+  # Sketch Configuration (Contribution 2: Hardware-Aware Quantization)
+  sketch:
+    type: "gaussian"       # Random Gaussian sketch matrix S
+    m: 256                 # Sketch dimension (Nyström rank)
+    
+  # Quantization Settings
+  quantization:
+    enabled: false         # Keep FP32 for constraint validation
+    dtype: "float32"
+    
+  # Preconditioner Configuration
+  preconditioner:
+    type: "nyström"        # Nyström Hessian approximation
+    
+    # Core Matrix Regularization (Contribution 3: Theoretical Guarantees)
+    regularization:
+      sigma: 1.0e-4        # Damping parameter
+      delta: 1.0e-4        # Kernel regularization
+      jitter_schedule: [0.0, 1.0e-8, 1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2]
+    
+  # Lazy Update Configuration (Contribution 1: Unified Framework)
+  lazy_update:
+    enabled: true
+    max_age: 10            # Reuse preconditioner for 10 steps
+    
+    # Stability Triggers (Safety Mechanisms)
+    stability_triggers:
+      orthogonality_check: true
+      line_search_failure: false
+      condition_num_threshold: 1.0e8
+  
+  # Sub-Protocol Selection (Contribution 1: Bifurcated Architecture)
+  protocol: "anp_newton"   # Use Newton for constraint handling
+                           # Alternative: "anp_diagonal" for sparse problems
+  
+  # Learning Rate & Step Size
+  lr: 1.0e-3
+  beta1: 0.9              # Momentum coefficient
+  eps: 1.0e-8             # Numerical stability
+  
+  # Failure Recovery (Contribution 3: Robust Guarantees)
+  fallback_on_failure: true
+  max_retries: 2
+
+# ===============================================================================
+# Training Configuration
+# ===============================================================================
+train:
+  max_steps: 250          # Run until convergence or max steps
+  log_freq: 5             # Log every 5 steps
+  checkpoint_freq: 50     # Save checkpoint every 50 steps
+  
+  # Early Stopping (Convergence Criterion)
+  early_stopping:
+    enabled: true
+    patience: 20          # Stop if no improvement for 20 steps
+    min_delta: 1.0e-6     # Minimum improvement threshold
+
+# ===============================================================================
+# Diagnostic Settings
+# ===============================================================================
+diagnostics:
+  compute_condition_number: true
+  compute_gram_error: true
+  track_jitter_usage: true
+  track_trigger_events: true
+  log_constraint_violation: true  # New: Monitor constraint satisfaction
+  
+# ===============================================================================
+# Validation Metrics
+# ===============================================================================
+validation:
+  # Check constraint satisfaction
+  constraint_tolerance: 1.0e-3    # Allow 0.1% violation
+  
+  # Optimality condition: ∇f(x) approximately parallel to normal cone
+  optimality_tolerance: 1.0e-4
+  
+  # Comparison with unconstrained optimum
+  compare_unconstrained: true

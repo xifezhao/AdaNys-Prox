@@ -1,0 +1,85 @@
+# ==============================================================================
+# Experiment Configuration: A1_Nystrom_FP32
+# Purpose: Establish the "Ideal" Second-Order Convergence upper bound.
+# Characteristics: No Quantization (FP32), No Laziness (tau=1), Full Comm cost.
+# Comparison: Should win on 'Iteration Steps', lose on 'Wall-Clock Time'.
+# ==============================================================================
+
+experiment:
+  id: "A1_Nystrom_FP32_Ideal"
+  description: "Pure Nystrom method with FP32 precision and atomic updates (tau=1)."
+  seed: 42
+  output_dir: "results/metrics/A1_nys_fp32"
+
+# ------------------------------------------------------------------------------
+# System Emulation
+# ------------------------------------------------------------------------------
+system:
+  device: "mps"
+  dtype: "float32"
+  
+  # Even for AdaNys, we use the same cluster specs to calculate overhead fairly
+  virtual_cluster:
+    num_shards: 32
+    bandwidth_gbps: 400.0
+    latency_us: 50.0
+
+# ------------------------------------------------------------------------------
+# Task Specification (Must match A0 for fair comparison)
+# ------------------------------------------------------------------------------
+task:
+  name: "dense_quadratic"
+  data_path: "data/dense_d2000_cond1e6.pt"
+  dim: 2000
+  batch_size: 0
+
+# ------------------------------------------------------------------------------
+# Optimizer Settings
+# ------------------------------------------------------------------------------
+optimizer:
+  name: "adanys_prox"
+  params:
+    lr: 1.0             # Newton-type methods often work well with lr near 1.0
+    momentum: 0.9       # Nesterov momentum
+    weight_decay: 0.0
+
+# ------------------------------------------------------------------------------
+# AdaNys Specifics (The "Ideal" Setup)
+# ------------------------------------------------------------------------------
+adanys:
+  enabled: true
+  
+  # Sub-protocol Selection
+  # Use 'newton' for dense quadratic tasks (Constraint handling / Dense direction)
+  # Use 'diagonal' for sparse tasks (L1 regularization)
+  protocol: "newton"
+
+  # Nystrom Hyperparameters
+  sketch_size_m: 256    # Standard paper setting
+  sigma: 1.0e-4         # Global damping (Trust region)
+  delta: 1.0e-6         # Kernel regularization (Inversion stability)
+
+  # --- CRITICAL SETTINGS FOR A1 (Ideal) ---
+  
+  # 1. Laziness: Disabled (Update every step)
+  laziness:
+    tau_initial: 1
+    tau_max: 1          # Force atomic updates
+    use_triggers: false # Not needed since we update every step anyway
+
+  # 2. Quantization: Disabled (FP32 Storage)
+  quantization:
+    enabled: false      # Store C_t in float32
+    format: "fp32"      # Explicitly bypass the E4M3 simulator
+    
+  # 3. Communication Pattern
+  # Even though ideal, AdaNys still uses O(m^2) comms, just very frequently.
+  # The simulator will calculate cost = Comm(m^2) + Compute(HVP) per step.
+
+# ------------------------------------------------------------------------------
+# Training Loop
+# ------------------------------------------------------------------------------
+training:
+  max_steps: 500        # Extended to 500 steps to verify superlinear convergence (Contribution 3)
+  log_interval: 1
+  track_grad_norm: true

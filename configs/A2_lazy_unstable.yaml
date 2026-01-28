@@ -1,0 +1,90 @@
+# ==============================================================================
+# Experiment Configuration: A2_Lazy_Unstable
+# Purpose: Demonstrate the risk of "Drift" when using Lazy Updates without safeguards.
+# Hypothesis: High laziness (tau=50) + Stochastic Noise -> Loss Spikes / Divergence.
+# Comparison: Will have high throughput (simulated) but poor convergence stability compared to A3.
+# ==============================================================================
+
+experiment:
+  id: "A2_Lazy_Unstable"
+  description: "AdaNys with aggressive laziness (tau=50) and NO stability triggers. Expected to exhibit loss spikes."
+  seed: 42
+  output_dir: "results/metrics/A2_lazy_unstable"
+
+# ------------------------------------------------------------------------------
+# System Emulation
+# ------------------------------------------------------------------------------
+system:
+  device: "mps"
+  dtype: "float32"
+  
+  virtual_cluster:
+    num_shards: 32
+    bandwidth_gbps: 400.0
+    latency_us: 50.0
+
+# ------------------------------------------------------------------------------
+# Task Specification
+# ------------------------------------------------------------------------------
+task:
+  name: "dense_quadratic"
+  data_path: "data/dense_d2000_cond1e6.pt"
+  dim: 2000
+  
+  # --- CRITICAL FOR A2 ---
+  # We use a small batch size to introduce stochastic gradient noise.
+  # A stale preconditioner (from 50 steps ago) applied to a noisy gradient
+  # is the recipe for instability.
+  batch_size: 64          
+  noise_level: 0.1        # Additional synthetic noise injection if supported by task
+
+# ------------------------------------------------------------------------------
+# Optimizer Settings
+# ------------------------------------------------------------------------------
+optimizer:
+  name: "adanys_prox"
+  params:
+    lr: 0.5               # Moderately high LR to exacerbate instability
+    momentum: 0.9
+    weight_decay: 0.0
+
+# ------------------------------------------------------------------------------
+# AdaNys Specifics (The "Unstable" Setup)
+# ------------------------------------------------------------------------------
+adanys:
+  enabled: true
+  protocol: "newton"
+
+  # Nystrom Hyperparameters
+  sketch_size_m: 256
+  sigma: 1.0e-4
+  delta: 1.0e-6
+
+  # --- CRITICAL SETTINGS FOR A2 (Unstable) ---
+  
+  # 1. Laziness: Aggressive & Blind
+  laziness:
+    tau_initial: 50       # Update Hessian only once every 50 steps
+    tau_max: 50           # Force long reuse periods
+    
+    # [THE TRAP]: Disable all safety triggers.
+    # The algorithm will blindly reuse the old H even if the landscape changes.
+    use_triggers: false   
+    trigger_thresholds:
+      orthogonality: -1.0 # Disable (impossible to trigger)
+      line_search: 100    # Disable (allow infinite failures)
+
+  # 2. Quantization: Disabled (Keep FP32)
+  # We keep FP32 to prove that the instability comes from *Staleness*, 
+  # not from Quantization noise.
+  quantization:
+    enabled: false
+    format: "fp32"
+
+# ------------------------------------------------------------------------------
+# Training Loop
+# ------------------------------------------------------------------------------
+training:
+  max_steps: 500
+  log_interval: 5         # Log frequent to capture the spikes
+  track_grad_norm: true   # Expect grad_norm to explode during spikes

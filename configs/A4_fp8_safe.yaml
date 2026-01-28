@@ -1,0 +1,90 @@
+# ==============================================================================
+# Experiment Configuration: A4_FP8_Safe
+# Purpose: Demonstrate the "Noise Floor" introduced by FP8 quantization.
+# Hypothesis: With a "Safe" delta (1e-6), the algorithm converges stably but 
+#             hits a floor determined by the quantization precision (E4M3), 
+#             unable to reach the deep convergence of FP32 (A1).
+# Comparison: Compare with A1 (FP32 Ideal) to visualize the floor.
+# ==============================================================================
+
+experiment:
+  id: "A4_FP8_Safe"
+  description: "AdaNys with FP8 quantization enabled and a safe regularization parameter (delta=1e-6)."
+  seed: 42
+  output_dir: "results/metrics/A4_fp8_safe"
+
+# ------------------------------------------------------------------------------
+# System Emulation
+# ------------------------------------------------------------------------------
+system:
+  device: "mps"
+  dtype: "float32" # Computation is FP32, Storage is simulated FP8
+  
+  virtual_cluster:
+    num_shards: 32
+    bandwidth_gbps: 400.0
+    latency_us: 50.0
+
+# ------------------------------------------------------------------------------
+# Task Specification
+# ------------------------------------------------------------------------------
+task:
+  name: "dense_quadratic"
+  data_path: "data/dense_d2000_cond1e6.pt"
+  dim: 2000
+  
+  # For A4, we use Full Batch (Deterministic) to isolate Quantization Noise.
+  # If we used Mini-batch, stochastic noise might mask the FP8 noise floor.
+  batch_size: 0     
+  noise_level: 0.0
+
+# ------------------------------------------------------------------------------
+# Optimizer Settings
+# ------------------------------------------------------------------------------
+optimizer:
+  name: "adanys_prox"
+  params:
+    lr: 1.0
+    momentum: 0.9
+    weight_decay: 0.0
+
+# ------------------------------------------------------------------------------
+# AdaNys Specifics (The "Quantized Safe" Setup)
+# ------------------------------------------------------------------------------
+adanys:
+  enabled: true
+  protocol: "newton"
+
+  # Nystrom Hyperparameters
+  sketch_size_m: 256
+  sigma: 1.0e-4         # Standard Trust Region
+  
+  # [CRITICAL 1]: Safe Delta
+  # delta=1e-6 is large enough to dampen the intrinsic noise of FP8 (~1e-2).
+  # This prevents the "Cliff" but accepts a bias (the Noise Floor).
+  delta: 1.0e-6         
+
+  # Laziness Settings
+  laziness:
+    tau_initial: 20     # Moderate laziness
+    tau_max: 20
+    use_triggers: true  # Keep safety triggers on
+
+  # [CRITICAL 2]: Quantization Enabled
+  quantization:
+    enabled: true
+    format: "fp8_e4m3"  # Activate the discrete lattice simulator
+    
+    # Must be true. If false (Tensor-wise scaling), the noise floor will be much higher.
+    column_wise_scaling: true 
+
+# ------------------------------------------------------------------------------
+# Training Loop
+# ------------------------------------------------------------------------------
+training:
+  max_steps: 150        # Enough steps to hit the floor
+  log_interval: 1
+  
+  # Important for diagnostics: Track the relative error of the Gram matrix
+  # ||G_fp8 - G_fp32|| / ||G_fp32||
+  track_gram_error: true

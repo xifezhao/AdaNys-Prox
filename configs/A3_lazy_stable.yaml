@@ -1,0 +1,100 @@
+# ==============================================================================
+# Experiment Configuration: A3_Lazy_Stable
+# Purpose: Demonstrate the efficacy of "Stability Triggers" in repairing drift.
+# Hypothesis: Triggers will detect the onset of instability (seen in A2) and 
+#             force a preconditioner update, smoothing the loss curve.
+# Comparison: Compare against A2 to show "Spike vs Smooth".
+# ==============================================================================
+
+experiment:
+  id: "A3_Lazy_Stable"
+  description: "AdaNys with aggressive laziness (tau=50) PROTECTED by stability triggers."
+  seed: 42
+  output_dir: "results/metrics/A3_lazy_stable"
+
+# ------------------------------------------------------------------------------
+# System Emulation
+# ------------------------------------------------------------------------------
+system:
+  device: "mps"
+  dtype: "float32"
+  
+  virtual_cluster:
+    num_shards: 32
+    bandwidth_gbps: 400.0
+    latency_us: 50.0
+
+# ------------------------------------------------------------------------------
+# Task Specification (MUST MATCH A2 EXACTLY)
+# ------------------------------------------------------------------------------
+task:
+  name: "dense_quadratic"
+  data_path: "data/dense_d2000_cond1e6.pt"
+  dim: 2000
+  
+  # Same stochastic setting as A2 to ensure the landscape "drifts" relative to the sketch
+  batch_size: 64          
+  noise_level: 0.1
+
+# ------------------------------------------------------------------------------
+# Optimizer Settings
+# ------------------------------------------------------------------------------
+optimizer:
+  name: "adanys_prox"
+  params:
+    lr: 0.5               # High LR makes stability mechanism work harder
+    momentum: 0.9
+    weight_decay: 0.0
+
+# ------------------------------------------------------------------------------
+# AdaNys Specifics (The "Stable" Setup)
+# ------------------------------------------------------------------------------
+adanys:
+  enabled: true
+  protocol: "newton"
+
+  # Nystrom Hyperparameters
+  sketch_size_m: 256
+  sigma: 1.0e-4
+  delta: 1.0e-6
+
+  # --- CRITICAL SETTINGS FOR A3 (Stable) ---
+  
+  # 1. Laziness: Aggressive but Guarded
+  laziness:
+    tau_initial: 50       # Attempt to be lazy
+    tau_max: 50
+    
+    # [THE SOLUTION]: Enable Stability Triggers
+    use_triggers: true
+    
+    trigger_thresholds:
+      # Geometry Shift: If cos(g_t, g_{t-1}) < 0.05, force update.
+      # This catches when the algorithm turns a sharp corner.
+      orthogonality: 0.05
+      
+      # Optimization Failure: If line search backtracks too much (e.g. 2 times), force update.
+      # This catches when the preconditioner is no longer positive definite locally.
+      line_search_failures: 2
+      
+      # Max Age: Hard limit even if everything looks fine (Paper Eq 18)
+      max_age: 50
+
+  # 2. Quantization: Disabled (FP32)
+  # Keeping FP32 allows us to attribute success purely to the *Triggers*, 
+  # ensuring we are fixing 'Drift', not 'Quantization Noise'.
+  quantization:
+    enabled: false
+    format: "fp32"
+
+# ------------------------------------------------------------------------------
+# Training Loop
+# ------------------------------------------------------------------------------
+training:
+  max_steps: 500
+  log_interval: 5
+  track_grad_norm: true
+  
+  # Enable detailed logging for debugging triggers
+  # This will save a 'triggers.csv' with timestamp and reason (Age/Orth/Fail)
+  log_triggers: true

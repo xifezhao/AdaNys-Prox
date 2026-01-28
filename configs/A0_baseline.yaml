@@ -1,0 +1,68 @@
+# ==============================================================================
+# Experiment Configuration: A0_Baseline
+# Purpose: Establish performance benchmarks for First-Order Methods (AdamW/SGD).
+# Key Metric: Wall-clock time (simulated) vs Loss.
+# ==============================================================================
+
+experiment:
+  id: "A0_Baseline_AdamW"
+  description: "Standard AdamW baseline with simulated O(d) communication overhead."
+  seed: 42
+  output_dir: "results/metrics/A0_baseline"
+
+# ------------------------------------------------------------------------------
+# System Emulation Settings (For Logical Simulation on M1)
+# ------------------------------------------------------------------------------
+system:
+  device: "mps"           # Use Apple Metal Performance Shaders
+  dtype: "float32"        # Baselines run in full precision
+  
+  # Distributed Simulation Parameters (Paper Setting: 32x H100)
+  # Used to calculate the theoretical communication penalty for baselines.
+  # SGD/AdamW must All-Reduce the full gradient vector (size d).
+  virtual_cluster:
+    num_shards: 32
+    bandwidth_gbps: 400.0 # InfiniBand NDR
+    latency_us: 50.0      # Typical ring latency
+
+# ------------------------------------------------------------------------------
+# Task Specification
+# ------------------------------------------------------------------------------
+task:
+  name: "dense_quadratic"
+  # Data should be pre-generated via src/tasks/dense_quadratic.py
+  data_path: "data/dense_d2000_cond1e6.pt" 
+  dim: 2000               # M1 feasible dimension
+  batch_size: 0           # 0 means Full Batch (Deterministic)
+
+# ------------------------------------------------------------------------------
+# Optimizer Settings
+# ------------------------------------------------------------------------------
+optimizer:
+  name: "adamw"           # Change to 'sgd' for pure convex comparison
+  params:
+    lr: 1.0e-3
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    
+  # Alternative SGD Config (Uncomment to use)
+  # name: "sgd"
+  # params:
+  #   lr: 0.1
+  #   momentum: 0.9
+  #   weight_decay: 0.0
+
+# ------------------------------------------------------------------------------
+# AdaNys Specifics (DISABLED for Baseline)
+# ------------------------------------------------------------------------------
+adanys:
+  enabled: false          # Strictly pure first-order execution
+
+# ------------------------------------------------------------------------------
+# Training Loop
+# ------------------------------------------------------------------------------
+training:
+  max_steps: 500
+  log_interval: 10        # Log metrics every N steps
+  track_grad_norm: true   # Useful to verify convergence near critical points

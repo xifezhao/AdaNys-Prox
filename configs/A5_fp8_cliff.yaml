@@ -1,0 +1,101 @@
+# ==============================================================================
+# Experiment Configuration: A5_FP8_Cliff
+# Purpose: Reproduce the "Quantization Cliff" phenomenon (Paper Appendix C).
+# Hypothesis: When kernel regularization 'delta' is smaller than the FP8 noise floor, 
+#             the core matrix (sigma*W + sigma*delta*I + G) becomes numerically 
+#             singular or indefinite due to quantization perturbations.
+# Key Diagnostic: 'jitter_needed' (amount of damping added to fix Cholesky).
+# ==============================================================================
+
+experiment:
+  id: "A5_FP8_Cliff"
+  description: "AdaNys with FP8 and TINY delta. Expected to trigger Cholesky failures and require high jitter."
+  seed: 42
+  output_dir: "results/metrics/A5_fp8_cliff"
+
+# ------------------------------------------------------------------------------
+# System Emulation
+# ------------------------------------------------------------------------------
+system:
+  device: "mps"
+  dtype: "float32"
+  
+  virtual_cluster:
+    num_shards: 32
+    bandwidth_gbps: 400.0
+    latency_us: 50.0
+
+# ------------------------------------------------------------------------------
+# Task Specification
+# ------------------------------------------------------------------------------
+task:
+  name: "dense_quadratic"
+  data_path: "data/dense_d2000_cond1e6.pt"
+  dim: 2000
+  
+  # A high condition number is essential to make the problem sensitive to 
+  # preconditioner quality. Spiked spectrum matches Neural Network Hessians.
+  condition_number: 1.0e6 
+  spectrum_type: "spiked"
+  batch_size: 0     # Full batch to isolate numerical issues from stochastic noise
+
+# ------------------------------------------------------------------------------
+# Optimizer Settings
+# ------------------------------------------------------------------------------
+optimizer:
+  name: "adanys_prox"
+  params:
+    lr: 1.0
+    momentum: 0.9
+    weight_decay: 0.0
+
+# ------------------------------------------------------------------------------
+# AdaNys Specifics (The "Cliff" Setup)
+# ------------------------------------------------------------------------------
+adanys:
+  enabled: true
+  protocol: "newton"
+
+  # Nystrom Hyperparameters
+  sketch_size_m: 256
+  sigma: 1.0e-4         # Standard Trust Region
+
+  # [CRITICAL 1]: The Sweep Variable 'delta'
+  # This config defines the "Extreme Failure Case" (1e-9).
+  # The run_matrix.py script should override this value over a range:
+  # [1e-2, 1e-4, 1e-6, 1e-7, 1e-8, 1e-9]
+  delta: 1.0e-9         
+
+  # Laziness Settings
+  laziness:
+    tau_initial: 20
+    tau_max: 20
+    use_triggers: true
+
+  # [CRITICAL 2]: Quantization Active
+  quantization:
+    enabled: true
+    format: "fp8_e4m3"  # Relative error ~ 1/8 (3-bit mantissa)
+    column_wise_scaling: true
+
+# ------------------------------------------------------------------------------
+# Training Loop & Diagnostics
+# ------------------------------------------------------------------------------
+training:
+  max_steps: 500        # Extended to 500 steps to verify superlinear convergence and quantization stability
+  log_interval: 1
+  
+  # --- Platinum Level Diagnostics ---
+  # These metrics prove the mechanism of failure, not just the symptom.
+  diagnostics:
+    # 1. Track how much jitter is added to make Cholesky work.
+    #    Expectation: 0 when stable, >> 0 when Cliff hit.
+    track_jitter_level: true
+    
+    # 2. Track the minimum eigenvalue of the Core Matrix.
+    #    Expectation: Becomes < 0 (mathematically impossible for SPD, 
+    #    but possible with FP8 errors) without jitter.
+    track_min_eig: true
+    
+    # 3. Track Gram Matrix Relative Error ||G_fp8 - G_fp32|| / ||G_fp32||
+    track_gram_error: true

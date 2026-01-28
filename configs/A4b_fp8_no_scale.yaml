@@ -1,0 +1,86 @@
+# ==============================================================================
+# Experiment Configuration: A4b_FP8_No_Scale
+# Purpose: Isolate the impact of "Column-wise Scaling" vs "Tensor-wise Scaling".
+# Hypothesis: Without column-wise scaling, the quantization range is determined 
+#             by the largest element in the sketch (dominant eigenvector). 
+#             Features with smaller curvature will underflow to zero, leading 
+#             to a much higher noise floor or poor search directions.
+# Comparison: Compare against A4 (FP8 + Col-Scale) to prove design necessity.
+# ==============================================================================
+
+experiment:
+  id: "A4b_FP8_No_Scale"
+  description: "AdaNys with FP8 enabled but utilizing naive Tensor-wise scaling (Column-wise DISABLED)."
+  seed: 42
+  output_dir: "results/metrics/A4b_fp8_no_scale"
+
+# ------------------------------------------------------------------------------
+# System Emulation
+# ------------------------------------------------------------------------------
+system:
+  device: "mps"
+  dtype: "float32"
+  
+  virtual_cluster:
+    num_shards: 32
+    bandwidth_gbps: 400.0
+    latency_us: 50.0
+
+# ------------------------------------------------------------------------------
+# Task Specification (Matches A4)
+# ------------------------------------------------------------------------------
+task:
+  name: "dense_quadratic"
+  data_path: "data/dense_d2000_cond1e6.pt"
+  dim: 2000
+  batch_size: 0     # Full batch to isolate quantization effects
+
+# ------------------------------------------------------------------------------
+# Optimizer Settings
+# ------------------------------------------------------------------------------
+optimizer:
+  name: "adanys_prox"
+  params:
+    lr: 1.0
+    momentum: 0.9
+    weight_decay: 0.0
+
+# ------------------------------------------------------------------------------
+# AdaNys Specifics (The "Bad Scaling" Setup)
+# ------------------------------------------------------------------------------
+adanys:
+  enabled: true
+  protocol: "newton"
+
+  # Nystrom Hyperparameters
+  sketch_size_m: 256
+  sigma: 1.0e-4
+  delta: 1.0e-6         # Keep delta safe to avoid Cliff, isolate Scaling effect
+
+  # Laziness Settings
+  laziness:
+    tau_initial: 20
+    tau_max: 20
+    use_triggers: true
+
+  # [CRITICAL CONFIGURATION FOR A4b]
+  quantization:
+    enabled: true
+    format: "fp8_e4m3"
+    
+    # THE TREATMENT VARIABLE:
+    # Disable column-wise scaling. The emulator will compute a SINGLE scale factor
+    # for the entire C_t matrix: s = max(|C_t|).
+    # This simulates standard "Block Quantization" or naive Tensor Quantization.
+    column_wise_scaling: false 
+
+# ------------------------------------------------------------------------------
+# Training Loop
+# ------------------------------------------------------------------------------
+training:
+  max_steps: 150
+  log_interval: 1
+  
+  # Diagnostic: We expect the relative Gram error to be much higher here
+  # compared to A4, especially for ill-conditioned problems.
+  track_gram_error: true
